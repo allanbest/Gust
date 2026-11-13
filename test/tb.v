@@ -27,8 +27,8 @@ module tb ();
   wire VGND = 1'b0;
 `endif
 
-  // Gust v1.0 core behind the byte-serial memory bridge:
-  tt_um_gust user_project (
+  // Gust v1.0 ALU:
+  tt_um_gust_alu user_project (
 
       // Include power ports for the Gate Level test:
 `ifdef GL_TEST

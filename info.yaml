@@ -1,65 +1,57 @@
 # Tiny Tapeout project information
 project:
-  title:        "Gust v1.0 RV32 core"      # Project title
+  title:        "Gust v1.0 ALU"      # Project title
   author:       "Allan"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "3-stage RV32IMC+Zba/Zbb/Zbs+Zcb microcontroller core with a byte-serial external memory bridge"      # One line description of what your project does
+  description:  "The 34-operation ALU of the Gust RV32 core (RV32I + Zba/Zbb/Zbs), loaded and read over the pins"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     20000000       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
-  tiles: "8x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
+  tiles: "2x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
-  top_module:  "tt_um_gust"
+  top_module:  "tt_um_gust_alu"
 
   # List your project's source files here.
   # Source files must be in ./src and you must list each source file separately, one per line.
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
-    - "tt_um_gust.v"
-    - "gust_core.v"
-    - "gust_fetch.v"
-    - "gust_rvc.v"
-    - "gust_decode.v"
+    - "tt_um_gust_alu.v"
     - "gust_alu.v"
-    - "gust_muldiv.v"
-    - "gust_regfile.v"
-    - "gust_csr.v"
-    - "gust_icg.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: "MEM_IN0"
-  ui[1]: "MEM_IN1"
-  ui[2]: "MEM_IN2"
-  ui[3]: "MEM_IN3"
-  ui[4]: "MEM_IN4"
-  ui[5]: "MEM_IN5"
-  ui[6]: "MEM_IN6"
-  ui[7]: "MEM_IN7"
+  ui[0]: "DATA0"
+  ui[1]: "DATA1"
+  ui[2]: "DATA2"
+  ui[3]: "DATA3"
+  ui[4]: "DATA4"
+  ui[5]: "DATA5"
+  ui[6]: "DATA6"
+  ui[7]: "DATA7"
 
   # Outputs
-  uo[0]: "MEM_OUT0"
-  uo[1]: "MEM_OUT1"
-  uo[2]: "MEM_OUT2"
-  uo[3]: "MEM_OUT3"
-  uo[4]: "MEM_OUT4"
-  uo[5]: "MEM_OUT5"
-  uo[6]: "MEM_OUT6"
-  uo[7]: "MEM_OUT7"
+  uo[0]: "RESULT0"
+  uo[1]: "RESULT1"
+  uo[2]: "RESULT2"
+  uo[3]: "RESULT3"
+  uo[4]: "RESULT4"
+  uo[5]: "RESULT5"
+  uo[6]: "RESULT6"
+  uo[7]: "RESULT7"
 
   # Bidirectional pins
-  uio[0]: "OUT_TGL"
-  uio[1]: "ACK"
-  uio[2]: "IN_TGL"
-  uio[3]: "SLEEP"
-  uio[4]: "BUSY"
-  uio[5]: "IRQ"
-  uio[6]: ""
-  uio[7]: ""
+  uio[0]: "LOAD"
+  uio[1]: "TARGET0"
+  uio[2]: "TARGET1"
+  uio[3]: "RSEL0"
+  uio[4]: "RSEL1"
+  uio[5]: ""
+  uio[6]: "EQ"
+  uio[7]: "LT"
 
 # Do not change!
 yaml_version: 6

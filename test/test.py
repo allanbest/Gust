@@ -1,83 +1,81 @@
 # SPDX-License-Identifier: Apache-2.0
-# Test for tt_um_gust: the testbench acts as external memory over the pins
-# and runs a small RISC-V program (sum of 1..10, result written to 0x8000_0000).
+# Test for tt_um_gust_alu: load operands over the pins, compare every ALU
+# operation against a Python reference model.
 
+import random
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, RisingEdge
+from cocotb.triggers import ClockCycles
 
-# sum.S assembled for RV32IMC at address 0:
-#   li a0,0; li t0,1; li t1,11; loop: add a0,a0,t0; addi t0,t0,1; bne t0,t1,loop
-#   li t2,0x80000000; sw a0,0(t2); j .
-PROGRAM = [0x42854501, 0x9516432D, 0x9EE30285, 0x03B7FE62, 0xA0238000, 0xA00100A3]
-
-OUT_TGL, ACK, IN_TGL = 0, 1, 2
+M = 0xFFFFFFFF
 
 
-class Host:
-    def __init__(self, dut):
-        self.dut = dut
-        self.ack = 0
-        self.in_tgl = 0
-        self.mem = {i * 4: w for i, w in enumerate(PROGRAM)}
+def s32(x):
+    return x - (1 << 32) if x & 0x80000000 else x
 
-    def _drive_uio(self):
-        self.dut.uio_in.value = (self.in_tgl << IN_TGL) | (self.ack << ACK)
 
-    async def get_byte(self, limit=2000):
-        for _ in range(limit):
-            if ((int(self.dut.uio_out.value) >> OUT_TGL) & 1) != self.ack:
-                b = int(self.dut.uo_out.value)
-                self.ack ^= 1
-                self._drive_uio()
-                await RisingEdge(self.dut.clk)
-                return b
-            await RisingEdge(self.dut.clk)
-        raise AssertionError("timeout waiting for a byte from Gust")
+def ref(op, a, b):
+    sh = b & 31
+    rol = lambda x, n: ((x << n) | (x >> (32 - n))) & M if n else x
+    return {
+        0: (a + b) & M, 1: (a - b) & M, 2: int(s32(a) < s32(b)), 3: int(a < b),
+        4: a ^ b, 5: a | b, 6: a & b, 7: (a << sh) & M, 8: a >> sh, 9: (s32(a) >> sh) & M,
+        10: ((a << 1) + b) & M, 11: ((a << 2) + b) & M, 12: ((a << 3) + b) & M,
+        13: a & ~b & M, 14: (a | ~b) & M, 15: ~(a ^ b) & M,
+        16: a if s32(a) < s32(b) else b, 17: min(a, b), 18: a if s32(a) > s32(b) else b, 19: max(a, b),
+        20: rol(a, sh), 21: rol(a, (32 - sh) & 31),
+        22: 32 - a.bit_length(), 23: ((a & -a).bit_length() - 1) if a else 32, 24: bin(a).count("1"),
+        25: (a & 0xFF) | (0xFFFFFF00 if a & 0x80 else 0), 26: (a & 0xFFFF) | (0xFFFF0000 if a & 0x8000 else 0),
+        27: a & 0xFFFF,
+        28: sum((0xFF << (8 * i)) for i in range(4) if (a >> (8 * i)) & 0xFF),
+        29: int.from_bytes(a.to_bytes(4, "little"), "big"),
+        30: a | (1 << sh), 31: a & ~(1 << sh) & M, 32: a ^ (1 << sh), 33: (a >> sh) & 1,
+    }[op]
 
-    async def put_byte(self, b):
-        self.dut.ui_in.value = b
-        await RisingEdge(self.dut.clk)
-        self.in_tgl ^= 1
-        self._drive_uio()
-        await ClockCycles(self.dut.clk, 4)   # protocol: hold >= 4 cycles
 
-    async def transaction(self):
-        cmd = await self.get_byte()
-        addr = 0
-        for _ in range(4):
-            addr = (addr << 8) | await self.get_byte()
-        if cmd & 0x40:  # write
-            data = 0
-            for k in range(4):
-                data |= (await self.get_byte()) << (8 * k)
-            return ("w", addr, data)
-        word = self.mem.get(addr & ~3, 0)
-        for k in range(4):
-            await self.put_byte((word >> (8 * k)) & 0xFF)
-        return ("r", addr, word)
+async def load(dut, target, byte):
+    dut.ui_in.value = byte
+    dut.uio_in.value = target << 1
+    await ClockCycles(dut.clk, 1)
+    dut.uio_in.value = (target << 1) | 1     # LOAD rising edge
+    await ClockCycles(dut.clk, 1)
+    dut.uio_in.value = target << 1
+    await ClockCycles(dut.clk, 1)
+
+
+async def run_op(dut, op, a, b):
+    for k in range(4):
+        await load(dut, 0, (a >> (8 * k)) & 0xFF)
+    for k in range(4):
+        await load(dut, 1, (b >> (8 * k)) & 0xFF)
+    await load(dut, 2, op)
+    await ClockCycles(dut.clk, 2)
+    r = 0
+    for k in range(4):
+        dut.uio_in.value = k << 3
+        await ClockCycles(dut.clk, 1)
+        r |= int(dut.uo_out.value) << (8 * k)
+    return r
 
 
 @cocotb.test()
-async def test_runs_program(dut):
-    clock = Clock(dut.clk, 20, unit="ns")    # 50 MHz
-    cocotb.start_soon(clock.start())
+async def test_alu_ops(dut):
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     dut.ena.value = 1
     dut.ui_in.value = 0
     dut.uio_in.value = 0
     dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
+    await ClockCycles(dut.clk, 5)
     dut.rst_n.value = 1
-
-    host = Host(dut)
-    first = None
-    for _ in range(400):
-        kind, addr, data = await host.transaction()
-        if first is None:
-            first = (kind, addr)
-            assert first == ("r", 0), f"first access should be a fetch from 0, got {first}"
-        if kind == "w" and addr == 0x80000000:
-            dut._log.info(f"Gust wrote result {data}")
-            assert data == 55, f"expected 55, got {data}"
-            return
-    raise AssertionError("program did not finish")
+    rng = random.Random(1)
+    edge = [0, 1, 0x7FFFFFFF, 0x80000000, M, 0x80, 0x8000, 31, 32]
+    checked = 0
+    for op in range(34):
+        for _ in range(4):
+            a = rng.choice(edge + [rng.getrandbits(32)] * 3)
+            b = rng.choice(edge + [rng.getrandbits(32)] * 3)
+            got = await run_op(dut, op, a, b)
+            want = ref(op, a, b)
+            assert got == want, f"op {op}: a={a:08x} b={b:08x} got {got:08x} want {want:08x}"
+            checked += 1
+    dut._log.info(f"{checked} ALU operations matched the reference model")
