@@ -1,0 +1,77 @@
+name: full-chip
+
+# Lays out the full Gust core on a square die with LibreLane (the same tool the
+# Tiny Tapeout flow uses), then publishes a 3D-viewer file into layout/.
+on:
+  push:
+    branches: [full-chip]
+    paths-ignore: ["layout/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      PDK_ROOT: /home/runner/pdk
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install LibreLane and KLayout
+        run: pip install librelane==3.0.14 klayout
+
+      - name: Lay out the full chip
+        run: |
+          python -m librelane --pdk-root "$PDK_ROOT" --docker-no-tty --dockerized \
+            --pdk sky130A --run-tag full --force-run-dir runs/full --hide-progress-bar \
+            fullchip_config.json
+
+      - name: Upload run reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullchip-reports
+          path: |
+            runs/full/final/metrics.json
+            runs/full/*/*.log
+          if-no-files-found: ignore
+
+      - name: Convert layout for the 3D viewer
+        run: |
+          mkdir -p layout
+          python - <<'EOF'
+          import klayout.db as db
+          ly = db.Layout()
+          ly.read("runs/full/final/gds/tt_um_gust.gds")
+          ly.set_property("TT_PDK", "sky130A")
+          ly.write("layout/gust_full.oas")
+          EOF
+          cp runs/full/final/metrics.json layout/gust_full_metrics.json
+          ls -la layout
+
+      - name: Publish layout to the branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add layout
+          git commit -m "Full-chip layout from run ${{ github.run_id }} [skip ci]"
+          git push
+
+      - name: Summary
+        run: |
+          URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/layout/gust_full.oas"
+          {
+            echo "# Gust full chip"
+            echo "[Open 3D viewer](https://gds-viewer.tinytapeout.com/?model=${URL}&pdk=sky130A)"
+            echo
+            echo '```'
+            python -c "import json;m=json.load(open('layout/gust_full_metrics.json'));[print(k,m[k]) for k in sorted(m) if any(s in k for s in ('design__instance__count','design__instance__utilization','timing__setup__ws','timing__hold__ws','route__drc_errors','antenna__violating'))]"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
