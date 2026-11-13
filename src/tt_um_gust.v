@@ -61,7 +61,9 @@ module tt_um_gust (
 
     gust_core #(
         .RESET_VECTOR(32'h0000_0000),
-        .CLOCK_GATE  (0)
+        .EXT_B       (0),
+        .MUL_FAST    (0),
+        .CLOCK_GATE  (1)
     ) u_core (
         .clk(clk), .rst_n(rst_n),
         .ibus_req(ibus_req), .ibus_addr(ibus_addr), .ibus_gnt(ibus_gnt),
