@@ -1,20 +1,21 @@
 {
-  "//": "Full Gust v1.0 core (with the byte-serial memory bridge) on a square die.",
-  "//": "Not a Tiny Tapeout tile: the 8x2 tile is too narrow to route the register file.",
-
+  "//": "Gust N1 v0.1 stage-1 core (Gust v1.0 + M/S/U privilege + Sv32 MMU) behind the byte-serial memory bridge, on a square die.",
   "DESIGN_NAME": "tt_um_gust",
   "VERILOG_FILES": "dir::src/*.v",
-  "VERILOG_INCLUDE_DIRS": ["dir::src"],
-
+  "VERILOG_INCLUDE_DIRS": [
+    "dir::src"
+  ],
   "CLOCK_PORT": "clk",
   "CLOCK_PERIOD": 50,
-
   "FP_SIZING": "absolute",
-  "DIE_AREA": [0, 0, 640, 640],
+  "DIE_AREA": [
+    0,
+    0,
+    760,
+    760
+  ],
   "PL_TARGET_DENSITY_PCT": 45,
-
   "GRT_ALLOW_CONGESTION": true,
-
   "RUN_KLAYOUT_XOR": false,
   "RUN_KLAYOUT_DRC": false
 }

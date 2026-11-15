@@ -1,10 +1,10 @@
-name: full-chip
+name: n1-chip
 
-# Lays out the full Gust core on a square die with LibreLane (the same tool the
+# Lays out the Gust N1 v0.1 core on a square die with LibreLane (the same tool the
 # Tiny Tapeout flow uses), then publishes a 3D-viewer file into layout/.
 on:
   push:
-    branches: [full-chip]
+    branches: [n1-chip]
     paths-ignore: ["layout/**"]
   workflow_dispatch:
 
@@ -38,7 +38,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fullchip-reports
+          name: n1-reports
           path: |
             runs/full/final/metrics.json
             runs/full/*/*.log
@@ -52,9 +52,9 @@ jobs:
           ly = db.Layout()
           ly.read("runs/full/final/gds/tt_um_gust.gds")
           ly.set_property("TT_PDK", "sky130A")
-          ly.write("layout/gust_full.oas")
+          ly.write("layout/gust_n1.oas")
           EOF
-          cp runs/full/final/metrics.json layout/gust_full_metrics.json
+          cp runs/full/final/metrics.json layout/gust_n1_metrics.json
           ls -la layout
 
       - name: Publish layout to the branch
@@ -67,12 +67,12 @@ jobs:
 
       - name: Summary
         run: |
-          URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/layout/gust_full.oas"
+          URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/layout/gust_n1.oas"
           {
-            echo "# Gust full chip"
+            echo "# Gust N1 v0.1"
             echo "[Open 3D viewer](https://gds-viewer.tinytapeout.com/?model=${URL}&pdk=sky130A)"
             echo
             echo '```'
-            python -c "import json;m=json.load(open('layout/gust_full_metrics.json'));[print(k,m[k]) for k in sorted(m) if any(s in k for s in ('design__instance__count','design__instance__utilization','timing__setup__ws','timing__hold__ws','route__drc_errors','antenna__violating'))]"
+            python -c "import json;m=json.load(open('layout/gust_n1_metrics.json'));[print(k,m[k]) for k in sorted(m) if any(s in k for s in ('design__instance__count','design__instance__utilization','timing__setup__ws','timing__hold__ws','route__drc_errors','antenna__violating'))]"
             echo '```'
           } >> $GITHUB_STEP_SUMMARY

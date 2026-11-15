@@ -48,6 +48,7 @@ module gust_core #(
     input  wire        ibus_rvalid,
     input  wire [31:0] ibus_rdata,
     input  wire        ibus_err,
+    input  wire        ibus_pf,          // N1: error is a page fault
 
     // data bus
     output wire        dbus_req,
@@ -59,6 +60,7 @@ module gust_core #(
     input  wire        dbus_rvalid,
     input  wire [31:0] dbus_rdata,
     input  wire        dbus_err,
+    input  wire        dbus_pf,          // N1: error is a page fault
 
     // interrupts (level sensitive, synchronous to clk)
     input  wire        irq_software,
@@ -77,7 +79,16 @@ module gust_core #(
     output wire [31:0] dbg_reg_rdata,
     output wire        dbg_reg_err,
 
-    output wire        sleeping          // WFI sleep, core clock may be off
+    output wire        sleeping,         // WFI sleep, core clock may be off
+
+    // N1: translation context for the memory-management unit
+    output wire [1:0]  mmu_priv_i,       // privilege used for fetches
+    output wire [1:0]  mmu_priv_d,       // effective privilege for loads/stores
+    output wire        mmu_satp_mode,    // 1 = Sv32
+    output wire [19:0] mmu_satp_ppn,
+    output wire        mmu_sum,
+    output wire        mmu_mxr,
+    output wire        mmu_tlb_flush     // satp written or sfence.vma
 );
     // ------------------------------------------------------------------
     // Clocking.  `clk` is free running; `gclk` stops while the core sleeps.
@@ -102,6 +113,8 @@ module gust_core #(
     reg         x_compressed;
     reg         x_illegal_c;
     reg         x_fetch_err;
+    reg         x_fetch_pf;
+    reg         x_err_second;
     reg         x_pred_taken;
     // X -> M
     reg         m_valid;
@@ -126,11 +139,15 @@ module gust_core #(
     // Fetch
     // ------------------------------------------------------------------
     wire        f_valid, f_ready, f_compressed, f_illegal, f_fetch_err;
+    wire        f_fetch_pf, f_err_second;
+    wire        ctx_flush;       // privilege or address space changes this cycle
     wire        f_pred_taken, f_busy;
     wire [31:0] f_instr, f_pc;
     wire        flush;
     wire [31:0] flush_pc;
-    wire        fetch_en = ~sleep_q & ~debug_q;
+    // No fetch request may leave in a cycle that changes the translation
+    // context: it would be translated with the old privilege / page table.
+    wire        fetch_en = ~sleep_q & ~debug_q & ~ctx_flush;
 
     gust_fetch #(
         .RESET_VECTOR(RESET_VECTOR), .BRANCH_PRED(BRANCH_PRED),
@@ -140,6 +157,7 @@ module gust_core #(
         .fetch_en(fetch_en), .flush(flush), .flush_pc(flush_pc),
         .ibus_req(ibus_req), .ibus_addr(ibus_addr), .ibus_gnt(ibus_gnt),
         .ibus_rvalid(ibus_rvalid), .ibus_rdata(ibus_rdata), .ibus_err(ibus_err),
+        .ibus_pf(ibus_pf), .f_fetch_pf(f_fetch_pf), .f_err_second(f_err_second),
         .f_valid(f_valid), .f_ready(f_ready), .f_instr(f_instr), .f_pc(f_pc),
         .f_compressed(f_compressed), .f_illegal(f_illegal),
         .f_fetch_err(f_fetch_err), .f_pred_taken(f_pred_taken),
@@ -152,7 +170,7 @@ module gust_core #(
     wire        d_illegal, d_rs1_used, d_rs2_used, d_rd_wen, d_op_b_imm;
     wire        d_is_branch, d_is_jal, d_is_jalr, d_is_load, d_is_store;
     wire        d_is_csr, d_is_mul, d_is_md, d_is_ecall, d_is_ebreak;
-    wire        d_is_mret, d_is_wfi, d_is_fencei;
+    wire        d_is_mret, d_is_wfi, d_is_fencei, d_is_sret, d_is_sfence;
     wire [31:0] d_imm, d_imm_bj;
     wire [5:0]  d_alu_op;
     wire [1:0]  d_op_a_sel;
@@ -167,7 +185,7 @@ module gust_core #(
         .is_load(d_is_load), .is_store(d_is_store), .is_csr(d_is_csr),
         .is_mul(d_is_mul), .is_md(d_is_md), .is_ecall(d_is_ecall),
         .is_ebreak(d_is_ebreak), .is_mret(d_is_mret), .is_wfi(d_is_wfi),
-        .is_fencei(d_is_fencei)
+        .is_fencei(d_is_fencei), .is_sret(d_is_sret), .is_sfence(d_is_sfence)
     );
 
     wire [4:0] x_rs1 = x_instr[19:15];
@@ -318,7 +336,11 @@ module gust_core #(
                                 ((x_instr[31:28] == 4'hB) | (x_instr[31:28] == 4'hC));
     wire        x_csr_wait    = x_instret_csr & m_valid;
 
-    wire [31:0] csr_rdata, csr_trap_vector, csr_mepc, csr_dpc;
+    wire [31:0] csr_rdata, csr_trap_vector, csr_mepc, csr_sepc, csr_dpc;
+    wire [1:0]  priv, csr_mpp;
+    wire        csr_mprv, csr_sum, csr_mxr, csr_tvm, csr_tw, csr_tsr;
+    wire        csr_satp_mode;
+    wire [19:0] csr_satp_ppn;
     wire        csr_illegal, csr_dcsr_step, csr_dcsr_ebreakm;
     wire        irq_any, irq_valid;
     wire [4:0]  irq_cause;
@@ -345,10 +367,15 @@ module gust_core #(
         .illegal(csr_illegal),
         .trap_en(trap_en), .trap_is_irq(trap_is_irq), .trap_cause(trap_cause),
         .trap_pc(trap_pc), .trap_tval(trap_tval),
-        .mret_en(x_fire & d_is_mret),
-        .trap_vector(csr_trap_vector), .mepc(csr_mepc),
+        .mret_en(x_fire & d_is_mret), .sret_en(x_fire & d_is_sret),
+        .trap_vector(csr_trap_vector), .mepc(csr_mepc), .sepc(csr_sepc),
+        .dbg_resume(debug_q & dbg_resume_req),
+        .priv(priv), .mstatus_mprv(csr_mprv), .mstatus_mpp(csr_mpp),
+        .mstatus_sum(csr_sum), .mstatus_mxr(csr_mxr), .mstatus_tvm(csr_tvm),
+        .mstatus_tw(csr_tw), .mstatus_tsr(csr_tsr),
+        .satp_mode(csr_satp_mode), .satp_ppn(csr_satp_ppn),
         .dbg_enter(dbg_enter), .dbg_cause(dbg_cause), .dbg_pc(x_pc),
-        .dpc(csr_dpc), .dcsr_step(csr_dcsr_step), .dcsr_ebreakm(csr_dcsr_ebreakm),
+        .dpc(csr_dpc), .dcsr_step(csr_dcsr_step), .dcsr_ebreak(csr_dcsr_ebreakm),
         .irq_software(irq_software), .irq_timer(irq_timer),
         .irq_external(irq_external), .irq_fast(irq_fast),
         .irq_any(irq_any), .irq_valid(irq_valid), .irq_cause(irq_cause),
@@ -362,7 +389,13 @@ module gust_core #(
     // ------------------------------------------------------------------
     // X-stage exceptions
     // ------------------------------------------------------------------
-    wire x_illegal   = d_illegal | x_illegal_c | (d_is_csr & csr_illegal);
+    // N1: instructions that are illegal at the current privilege level
+    wire priv_m = (priv == 2'b11), priv_s = (priv == 2'b01), priv_u = (priv == 2'b00);
+    wire x_priv_illegal = (d_is_mret   & ~priv_m) |
+                          (d_is_sret   & (priv_u | (priv_s & csr_tsr))) |
+                          (d_is_wfi    & (priv_u | (priv_s & csr_tw))) |
+                          (d_is_sfence & (priv_u | (priv_s & csr_tvm)));
+    wire x_illegal   = d_illegal | x_illegal_c | (d_is_csr & csr_illegal) | x_priv_illegal;
     wire x_exc_fetch = x_fetch_err;
     wire x_exc_ill   = ~x_fetch_err & x_illegal;
     wire x_dec_ok    = ~x_fetch_err & ~x_illegal;
@@ -377,14 +410,14 @@ module gust_core #(
     always @* begin
         exc_tval = 32'b0;
         if (x_exc_fetch) begin
-            exc_cause = `GUST_EXC_IFAULT;
-            exc_tval  = x_pc;
+            exc_cause = x_fetch_pf ? 5'd12 : `GUST_EXC_IFAULT;
+            exc_tval  = x_pc + {30'b0, x_err_second, 1'b0};
         end else if (x_exc_ill) begin
             exc_cause = `GUST_EXC_ILLEGAL;
         end else if (x_exc_ebrk) begin
             exc_cause = `GUST_EXC_BREAKPOINT;
         end else if (x_exc_ecall) begin
-            exc_cause = `GUST_EXC_ECALL_M;
+            exc_cause = {3'b010, priv};          // 8 U, 9 S, 11 M
         end else begin
             exc_cause = d_is_store ? `GUST_EXC_SMISALIGN : `GUST_EXC_LMISALIGN;
             exc_tval  = mem_addr;
@@ -433,12 +466,15 @@ module gust_core #(
     // Redirects
     // ------------------------------------------------------------------
     wire br_mispred = d_is_branch & (br_taken != x_pred_taken);
+    wire x_satp_wr  = d_is_csr & x_csr_wr_intent & (x_instr[31:20] == 12'h180);
     wire x_redirect = x_fire & (br_mispred | (d_is_jal & ~x_pred_taken) |
-                                d_is_jalr | d_is_mret | d_is_fencei);
+                                d_is_jalr | d_is_mret | d_is_fencei |
+                                d_is_sret | d_is_sfence | x_satp_wr);
     wire [31:0] x_redir_pc =
         d_is_jalr                 ? {alu_add[31:1], 1'b0} :
         d_is_mret                 ? csr_mepc :
-        d_is_fencei               ? x_pc_next :
+        d_is_sret                 ? csr_sepc :
+        (d_is_fencei | d_is_sfence | x_satp_wr) ? x_pc_next :
         (d_is_jal | br_taken)     ? btarget : x_pc_next;
 
     wire trap_x     = take_irq | take_exc;
@@ -446,7 +482,8 @@ module gust_core #(
 
     assign trap_en     = m_trap | trap_x;
     assign trap_is_irq = ~m_trap & take_irq;
-    assign trap_cause  = m_trap   ? (m_is_store ? `GUST_EXC_SFAULT : `GUST_EXC_LFAULT) :
+    assign trap_cause  = m_trap   ? (dbus_pf ? (m_is_store ? 5'd15 : 5'd13)
+                                             : (m_is_store ? `GUST_EXC_SFAULT : `GUST_EXC_LFAULT)) :
                          take_irq ? irq_cause : exc_cause;
     assign trap_pc     = m_trap ? m_pc : x_pc;
     assign trap_tval   = m_trap ? m_result : (take_irq ? 32'b0 : exc_tval);
@@ -493,6 +530,8 @@ module gust_core #(
             x_compressed <= f_compressed;
             x_illegal_c  <= f_illegal;
             x_fetch_err  <= f_fetch_err;
+            x_fetch_pf   <= f_fetch_pf;
+            x_err_second <= f_err_second;
             x_pred_taken <= f_pred_taken;
         end
     end
@@ -554,5 +593,18 @@ module gust_core #(
     end
 
     assign clk_en   = ~sleep_q | wake | f_busy | m_valid | req_hold_q;
+
+    // ------------------------------------------------------------------
+    // N1: translation context
+    // ------------------------------------------------------------------
+    assign ctx_flush     = trap_en | dbg_resume | dbg_enter |
+                           (x_fire & (d_is_mret | d_is_sret | d_is_sfence | x_satp_wr));
+    assign mmu_priv_i    = debug_q ? 2'b11 : priv;
+    assign mmu_priv_d    = debug_q ? 2'b11 : (csr_mprv ? csr_mpp : priv);
+    assign mmu_satp_mode = csr_satp_mode;
+    assign mmu_satp_ppn  = csr_satp_ppn;
+    assign mmu_sum       = csr_sum;
+    assign mmu_mxr       = csr_mxr;
+    assign mmu_tlb_flush = x_fire & (d_is_sfence | x_satp_wr);
     assign sleeping = sleep_q;
 endmodule

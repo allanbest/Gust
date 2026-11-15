@@ -36,6 +36,7 @@ module gust_fetch #(
     input  wire        ibus_rvalid,
     input  wire [31:0] ibus_rdata,
     input  wire        ibus_err,
+    input  wire        ibus_pf,      // N1: the error is a page fault
 
     output wire        f_valid,      // head instruction available
     input  wire        f_ready,      // X stage accepts it this cycle
@@ -44,6 +45,8 @@ module gust_fetch #(
     output wire        f_compressed,
     output wire        f_illegal,    // reserved compressed encoding
     output wire        f_fetch_err,  // bus error on (part of) the instruction
+    output wire        f_fetch_pf,   // N1: ... and it is a page fault
+    output wire        f_err_second, // N1: the fault is in the second parcel
     output wire        f_pred_taken,
 
     output wire        busy          // a response is still outstanding
@@ -52,6 +55,7 @@ module gust_fetch #(
 
     reg  [15:0]     buf_q [0:CAP-1];
     reg  [CAP-1:0]  err_q;
+    reg  [CAP-1:0]  pf_q;
     reg  [2:0]      cnt_q;        // valid parcels in buf_q
     reg  [31:0]     pc_q;         // PC of the head instruction
     reg  [29:0]     faddr_q;      // next word address to request
@@ -70,6 +74,7 @@ module gust_fetch #(
     // "view": buffer contents followed by the parcels arriving this cycle
     wire [15:0] v    [0:CAP+1];
     wire        verr [0:CAP+1];
+    wire        vpf  [0:CAP+1];
     genvar gi;
     generate
         for (gi = 0; gi < CAP + 2; gi = gi + 1) begin : g_view
@@ -78,9 +83,11 @@ module gust_fetch #(
                 assign v[gi]    = from_buf ? buf_q[gi] :
                                   ((cnt_q == gi) ? in0 : in1);
                 assign verr[gi] = from_buf ? err_q[gi] : ibus_err;
+                assign vpf[gi]  = from_buf ? pf_q[gi]  : ibus_pf;
             end else begin : g_past_buf
                 assign v[gi]    = (cnt_q == gi) ? in0 : in1;
                 assign verr[gi] = ibus_err;
+                assign vpf[gi]  = ibus_pf;
             end
         end
     endgenerate
@@ -106,6 +113,8 @@ module gust_fetch #(
     assign f_compressed = is_c;
     assign f_illegal    = is_c & c_illegal;
     assign f_fetch_err  = head_err;
+    assign f_fetch_pf   = verr[0] ? vpf[0] : vpf[1];
+    assign f_err_second = ~verr[0];
 
     // ------------------------------------------------- static prediction
     wire is_jal = (f_instr[6:0] == 7'b1101111);
@@ -185,6 +194,8 @@ module gust_fetch #(
                                  (k == 2'd1) ? v[gi+1] : v[gi+2];
                     err_q[gi] <= (k == 2'd0) ? verr[gi] :
                                  (k == 2'd1) ? verr[gi+1] : verr[gi+2];
+                    pf_q[gi]  <= (k == 2'd0) ? vpf[gi] :
+                                 (k == 2'd1) ? vpf[gi+1] : vpf[gi+2];
                 end
             end
         end

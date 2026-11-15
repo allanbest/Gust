@@ -1,5 +1,5 @@
 /*
- * Tiny Tapeout wrapper for the Gust v1.0 RV32 core.
+ * Wrapper for the Gust N1 v0.1 core (Gust v1.0 + M/S/U privilege + Sv32 MMU).
  * SPDX-License-Identifier: Apache-2.0
  *
  * The core's instruction and data buses are bridged to a byte-serial
@@ -59,7 +59,7 @@ module tt_um_gust (
     reg         ibus_rvalid, dbus_rvalid;
     reg  [31:0] rdata;
 
-    gust_core #(
+    n1_core #(
         .RESET_VECTOR(32'h0000_0000),
         .CLOCK_GATE  (0)
     ) u_core (

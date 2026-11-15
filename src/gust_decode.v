@@ -36,7 +36,9 @@ module gust_decode #(
     output reg         is_ebreak,
     output reg         is_mret,
     output reg         is_wfi,
-    output reg         is_fencei
+    output reg         is_fencei,
+    output reg         is_sret,     // N1
+    output reg         is_sfence    // N1: sfence.vma
 );
     wire [6:0] opcode = instr[6:0];
     wire [2:0] f3     = instr[14:12];
@@ -76,6 +78,8 @@ module gust_decode #(
         is_mret   = 1'b0;
         is_wfi    = 1'b0;
         is_fencei = 1'b0;
+        is_sret   = 1'b0;
+        is_sfence = 1'b0;
 
         case (opcode)
         7'b0110111: begin // LUI
@@ -275,8 +279,14 @@ module gust_decode #(
                 25'h0002000: is_ebreak = 1'b1;   // 0x00100073
                 25'h0604000: is_mret   = 1'b1;   // 0x30200073
                 25'h020a000: is_wfi    = 1'b1;   // 0x10500073
+                25'h0204000: is_sret   = 1'b1;   // 0x10200073
                 default:     illegal   = 1'b1;
                 endcase
+                // sfence.vma rs1, rs2 : funct7 = 0001001, rd = 0
+                if (instr[31:25] == 7'b0001001 && instr[11:7] == 5'd0) begin
+                    is_sfence = 1'b1;
+                    illegal   = 1'b0;
+                end
             end else if (f3 == 3'b100) begin
                 illegal = 1'b1;
             end else begin
